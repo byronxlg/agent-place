@@ -9,3 +9,14 @@ variable "deploy_rev" {
   type    = string
   default = ""
 }
+
+variable "domain" {
+  type    = string
+  default = "agent-place.botsmith.dev"
+}
+
+# botsmith.dev
+variable "cloudflare_zone_id" {
+  type    = string
+  default = "48ca6d98636690b501989633f07852a1"
+}

@@ -96,6 +96,21 @@ data "aws_iam_policy_document" "ci" {
     resources = ["*"]
   }
 
+  # ACM create/list actions are not resource-scopable.
+  statement {
+    sid       = "ManageCertificates"
+    actions   = ["acm:*"]
+    resources = ["*"]
+  }
+
+  # API Gateway ARNs carry no account id and the v2 API id is generated, so
+  # scope by region only.
+  statement {
+    sid       = "ManageApiGateway"
+    actions   = ["apigateway:*"]
+    resources = ["arn:aws:apigateway:${var.region}::/*"]
+  }
+
   statement {
     sid     = "ManageOwnIamSurface"
     actions = ["iam:*"]
@@ -115,6 +130,17 @@ resource "aws_iam_policy" "ci" {
 resource "aws_iam_user_policy_attachment" "ci" {
   user       = aws_iam_user.ci.name
   policy_arn = aws_iam_policy.ci.arn
+}
+
+# IAM policy changes are eventually consistent; new grants used later in the
+# same apply race the propagation. Re-sleeps whenever the policy document
+# changes; resources first created under a fresh grant should depend on this
+# instead of the policy directly.
+resource "time_sleep" "iam_propagation" {
+  create_duration = "20s"
+  triggers = {
+    policy = aws_iam_policy.ci.policy
+  }
 }
 
 # --- DynamoDB ---
@@ -221,4 +247,104 @@ resource "aws_lambda_permission" "public_url" {
   function_name          = aws_lambda_function.api.function_name
   principal              = "*"
   function_url_auth_type = "NONE"
+}
+
+# --- Custom domain: agent-place.botsmith.dev -> API Gateway -> Lambda ---
+# Function URLs cannot serve custom hostnames (they route by Host header),
+# so the branded domain goes through an HTTP API. The function URL stays as
+# a fallback.
+
+resource "aws_acm_certificate" "api" {
+  domain_name       = var.domain
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  # The CI policy grants acm:* in the same apply that first creates this;
+  # order behind the grant plus its propagation delay.
+  depends_on = [time_sleep.iam_propagation]
+}
+
+resource "cloudflare_dns_record" "acm_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.api.domain_validation_options : dvo.domain_name => {
+      name  = dvo.resource_record_name
+      type  = dvo.resource_record_type
+      value = dvo.resource_record_value
+    }
+  }
+
+  zone_id = var.cloudflare_zone_id
+  name    = trimsuffix(each.value.name, ".")
+  type    = each.value.type
+  content = trimsuffix(each.value.value, ".")
+  ttl     = 60
+  proxied = false
+}
+
+resource "aws_acm_certificate_validation" "api" {
+  certificate_arn         = aws_acm_certificate.api.arn
+  validation_record_fqdns = [for r in cloudflare_dns_record.acm_validation : r.name]
+}
+
+resource "aws_apigatewayv2_api" "api" {
+  name          = local.function_name
+  protocol_type = "HTTP"
+
+  # Same reasoning as the certificate: the apigateway:* grant ships in this apply.
+  depends_on = [time_sleep.iam_propagation]
+}
+
+resource "aws_apigatewayv2_integration" "lambda" {
+  api_id                 = aws_apigatewayv2_api.api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.api.invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "default" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.api.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+resource "aws_lambda_permission" "apigw" {
+  statement_id  = "AllowApiGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.api.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
+}
+
+resource "aws_apigatewayv2_domain_name" "api" {
+  domain_name = var.domain
+
+  domain_name_configuration {
+    certificate_arn = aws_acm_certificate_validation.api.certificate_arn
+    endpoint_type   = "REGIONAL"
+    security_policy = "TLS_1_2"
+  }
+}
+
+resource "aws_apigatewayv2_api_mapping" "api" {
+  api_id      = aws_apigatewayv2_api.api.id
+  domain_name = aws_apigatewayv2_domain_name.api.id
+  stage       = aws_apigatewayv2_stage.default.id
+}
+
+resource "cloudflare_dns_record" "api" {
+  zone_id = var.cloudflare_zone_id
+  name    = var.domain
+  type    = "CNAME"
+  content = aws_apigatewayv2_domain_name.api.domain_name_configuration[0].target_domain_name
+  ttl     = 1
+  proxied = false
 }

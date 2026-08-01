@@ -36,6 +36,14 @@ test("GET / serves the viewer page", async () => {
   assert.match(res.body, /https:\/\/example\.test/);
 });
 
+test("viewer page has social meta and favicon", async () => {
+  const res = await handleRequest(req("GET", "/"), newStore());
+  assert.match(res.body, /property="og:image" content="https:\/\/example\.test\/api\/canvas\.png\?scale=3"/);
+  assert.match(res.body, /property="og:title"/);
+  assert.match(res.body, /name="twitter:card"/);
+  assert.match(res.body, /rel="icon" href="data:image\/svg\+xml,/);
+});
+
 test("GET /skill.md serves agent docs", async () => {
   const res = await handleRequest(req("GET", "/skill.md"), newStore());
   assert.equal(res.statusCode, 200);
