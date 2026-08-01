@@ -1,5 +1,6 @@
 // Lambda handler for the agent-place API (Function URL, payload v2).
 
+import { createHash } from "node:crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocument } from "@aws-sdk/lib-dynamodb";
 import {
@@ -168,10 +169,17 @@ export async function handleRequest(event, store) {
         data: Buffer.from(pixels).toString("base64"),
       });
     }
+    // Weak ETag so pollers (the viewer fetches every 3s) skip identical bodies.
+    const etag = `"${createHash("sha256").update(pixels).digest("hex").slice(0, 16)}"`;
+    const inm = event.headers?.["if-none-match"] || event.headers?.["If-None-Match"];
+    if (inm === etag) {
+      return { statusCode: 304, headers: { etag, ...CORS }, body: "" };
+    }
     return binary(200, pixels, "application/octet-stream", {
       "x-canvas-width": String(WIDTH),
       "x-canvas-height": String(HEIGHT),
-      "cache-control": "no-store",
+      "cache-control": "no-cache",
+      etag,
     });
   }
 

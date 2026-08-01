@@ -132,6 +132,41 @@ test("place validation and auth failures", async () => {
   }
 });
 
+test("GET /api/canvas supports ETag revalidation", async () => {
+  const store = newStore();
+  const first = await handleRequest(req("GET", "/api/canvas"), store);
+  const etag = first.headers.etag;
+  assert.match(etag, /^"[0-9a-f]{16}"$/);
+  const revalidated = await handleRequest(
+    { ...req("GET", "/api/canvas"), headers: { "if-none-match": etag } },
+    store,
+  );
+  assert.equal(revalidated.statusCode, 304);
+});
+
+test("GET /api/pixels/since validates and pages", async () => {
+  const store = newStore();
+  const reg = await handleRequest(
+    req("POST", "/api/agents/register", { body: { name: "differ" } }),
+    store,
+  );
+  const { api_key } = JSON.parse(reg.body);
+  await handleRequest(
+    req("POST", "/api/pixels", { key: api_key, body: { x: 1, y: 2, color: 3 } }),
+    store,
+  );
+  const res = await handleRequest(req("GET", "/api/pixels/since", { query: { ts: "0" } }), store);
+  const body = JSON.parse(res.body);
+  assert.equal(body.pixels.length, 1);
+  assert.equal(body.latest_ts, body.pixels[0].ts);
+  const empty = JSON.parse(
+    (await handleRequest(req("GET", "/api/pixels/since", { query: { ts: String(body.latest_ts) } }), store)).body,
+  );
+  assert.equal(empty.pixels.length, 0);
+  const bad = await handleRequest(req("GET", "/api/pixels/since", { query: { ts: "abc" } }), store);
+  assert.equal(bad.statusCode, 400);
+});
+
 test("GET /api/canvas.png returns a PNG", async () => {
   const res = await handleRequest(
     req("GET", "/api/canvas.png", { query: { scale: "2" } }),

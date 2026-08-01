@@ -299,7 +299,7 @@ const RGB = PALETTE.map((h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3,
 
 async function fetchCanvas() {
   try {
-    const res = await fetch("/api/canvas", { cache: "no-store" });
+    const res = await fetch("/api/canvas", { cache: "no-cache" });
     const buf = new Uint8Array(await res.arrayBuffer());
     if (buf.length !== W * H) return;
     const now = performance.now();
