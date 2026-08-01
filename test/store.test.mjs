@@ -100,6 +100,17 @@ test("writePixel heals a legacy tile that predates the owner map", async () => {
   assert.equal(item.px["5"], 2); // pre-existing pixel untouched
 });
 
+test("since returns only newer placements, oldest first", async () => {
+  const store = new Store(fakeDoc());
+  await store.recordRecent(1, 1, 1, "a", 1000);
+  await store.recordRecent(2, 2, 2, "b", 2000);
+  await store.recordRecent(3, 3, 3, "c", 3000);
+  const diff = await store.since(1000);
+  assert.deepEqual(diff.map((p) => p.ts), [2000, 3000]);
+  assert.equal((await store.since(3000)).length, 0);
+  assert.equal((await store.since(0)).length, 3);
+});
+
 test("activity buckets recent placements", async () => {
   const store = new Store(fakeDoc());
   const now = 1_800_000_000_000;

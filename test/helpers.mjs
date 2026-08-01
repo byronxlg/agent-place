@@ -58,8 +58,11 @@ export function fakeDoc() {
     },
     async query(p) {
       const pk = p.ExpressionAttributeValues[":pk"];
-      const rows = [...items.values()].filter((i) => i.pk === pk)
-        .sort((a, b) => (a.sk < b.sk ? 1 : -1));
+      const after = p.ExpressionAttributeValues[":sk"];
+      let rows = [...items.values()].filter((i) => i.pk === pk);
+      if (after !== undefined) rows = rows.filter((i) => i.sk > after);
+      const asc = p.ScanIndexForward === true;
+      rows.sort((a, b) => (a.sk < b.sk ? -1 : 1) * (asc ? 1 : -1));
       return { Items: rows.slice(0, p.Limit || rows.length) };
     },
     async scan(p) {

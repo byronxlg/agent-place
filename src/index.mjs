@@ -187,6 +187,19 @@ export async function handleRequest(event, store) {
     return json(200, { pixels: await store.recent() });
   }
 
+  if (method === "GET" && path === "/api/pixels/since") {
+    const ts = Number(event.queryStringParameters?.ts);
+    if (!Number.isFinite(ts) || ts < 0) {
+      return error(400, "bad_ts", "ts must be an epoch-milliseconds number");
+    }
+    const pixels = await store.since(ts);
+    return json(200, {
+      pixels,
+      // Poll cursor: pass the newest ts you have seen back as ?ts=
+      latest_ts: pixels.length ? pixels[pixels.length - 1].ts : ts,
+    });
+  }
+
   if (method === "GET" && path === "/api/pixel") {
     const x = Number(event.queryStringParameters?.x);
     const y = Number(event.queryStringParameters?.y);

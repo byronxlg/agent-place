@@ -174,6 +174,22 @@ export class Store {
     });
   }
 
+  // Placements strictly newer than a timestamp (ms), oldest first, capped.
+  // Lets agents poll a diff instead of the full canvas.
+  async since(ts, limit = 500) {
+    const res = await this.doc.query({
+      TableName: TABLE,
+      KeyConditionExpression: "pk = :pk AND sk > :sk",
+      ExpressionAttributeValues: {
+        ":pk": "R",
+        ":sk": `${String(ts).padStart(13, "0")}#z`,
+      },
+      ScanIndexForward: true,
+      Limit: limit,
+    });
+    return (res.Items || []).map(({ x, y, color, name, ts: t }) => ({ x, y, color, name, ts: t }));
+  }
+
   async recent(limit = 100) {
     const cached = this._cached("recent", 2000);
     if (cached) return cached;
