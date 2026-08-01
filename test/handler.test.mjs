@@ -10,10 +10,10 @@ import { WIDTH, HEIGHT, COOLDOWN_SECONDS } from "../src/canvas.mjs";
 // To avoid duplication we import the fake from a shared helper.
 import { fakeDoc } from "./helpers.mjs";
 
-function req(method, path, { body, key, query } = {}) {
+function req(method, path, { body, key, query, ip } = {}) {
   return {
     rawPath: path,
-    requestContext: { http: { method } },
+    requestContext: { http: { method, sourceIp: ip || "203.0.113.7" } },
     headers: {
       host: "example.test",
       "x-forwarded-proto": "https",
@@ -102,14 +102,42 @@ test("register validation and conflicts", async () => {
   assert.equal(dup.statusCode, 409);
 });
 
-test("place validation and auth failures", async () => {
+test("anonymous placement: no auth places as anon with per-IP cooldown", async () => {
   const store = newStore();
-  const noAuth = await handleRequest(
-    req("POST", "/api/pixels", { body: { x: 1, y: 1, color: 1 } }),
+  const first = await handleRequest(
+    req("POST", "/api/pixels", { body: { x: 5, y: 5, color: 3 } }),
     store,
   );
-  assert.equal(noAuth.statusCode, 401);
+  assert.equal(first.statusCode, 200);
+  const body = JSON.parse(first.body);
+  assert.match(body.placed_as, /^anon-[0-9a-f]{4}$/);
+  assert.match(body.note, /Register/);
 
+  // Same IP again: cooldown.
+  const again = await handleRequest(
+    req("POST", "/api/pixels", { body: { x: 6, y: 5, color: 3 } }),
+    store,
+  );
+  assert.equal(again.statusCode, 429);
+
+  // Different IP: independent cooldown, different stable name.
+  const other = await handleRequest(
+    req("POST", "/api/pixels", { body: { x: 7, y: 5, color: 3 }, ip: "198.51.100.9" }),
+    store,
+  );
+  assert.equal(other.statusCode, 200);
+  assert.notEqual(JSON.parse(other.body).placed_as, body.placed_as);
+
+  // Attribution and leaderboard include the anon.
+  const info = JSON.parse((await handleRequest(
+    req("GET", "/api/pixel", { query: { x: "5", y: "5" } }), store)).body);
+  assert.equal(info.placed_by, body.placed_as);
+  const lb = JSON.parse((await handleRequest(req("GET", "/api/leaderboard"), store)).body);
+  assert.ok(lb.agents.some((a) => a.name === body.placed_as));
+});
+
+test("place validation and auth failures", async () => {
+  const store = newStore();
   const badKey = await handleRequest(
     req("POST", "/api/pixels", { key: "ap_bogus", body: { x: 1, y: 1, color: 1 } }),
     store,

@@ -120,9 +120,10 @@ export async function handleRequest(event, store) {
   }
 
   // --- Place a pixel ---
+  // With a Bearer api_key: places as the registered agent. Without one:
+  // places anonymously (attributed anon-<iphash>, cooldown per source IP).
   if (method === "POST" && path === "/api/pixels") {
     const key = bearer(event);
-    if (!key) return error(401, "unauthorized", "Send your api_key as: Authorization: Bearer <key>");
     const body = parseBody(event);
     if (body === null) return error(400, "bad_json", "Request body must be valid JSON");
     const { x, y, color } = body;
@@ -134,19 +135,26 @@ export async function handleRequest(event, store) {
     }
     try {
       const now = Date.now();
-      const agent = await store.claimPlacement(hashKey(key), now);
+      const agent = key
+        ? await store.claimPlacement(hashKey(key), now)
+        : await store.claimAnonPlacement(
+          event.requestContext?.http?.sourceIp || "unknown", now);
       await store.writePixel(x, y, color, agent.name);
       await store.recordRecent(x, y, color, agent.name, now);
       return json(200, {
         ok: true,
         x, y, color,
+        placed_as: agent.name,
         pixels_placed: agent.pixels_placed,
         next_allowed_at: now + COOLDOWN_SECONDS * 1000,
         cooldown_seconds: COOLDOWN_SECONDS,
+        ...(key ? {} : {
+          note: `Placed anonymously as ${agent.name}. Register at POST /api/agents/register to pick your name and build a leaderboard record.`,
+        }),
       });
     } catch (err) {
       if (err instanceof UnauthorizedError) {
-        return error(401, "unauthorized", "Unknown api_key. Register at POST /api/agents/register");
+        return error(401, "unauthorized", "Unknown api_key. Register at POST /api/agents/register, or omit the Authorization header to place anonymously");
       }
       if (err instanceof CooldownError) {
         return error(429, "cooldown", `You can place again in ${err.retryAfter}s`, {
@@ -254,10 +262,19 @@ export async function handleRequest(event, store) {
 }
 
 export async function handler(event) {
+  const method = event.requestContext?.http?.method || "?";
+  const path = event.rawPath || "?";
   try {
-    return await handleRequest(event, defaultStore);
+    const res = await handleRequest(event, defaultStore);
+    // One line per request so traffic and funnel are visible in CloudWatch.
+    console.log(JSON.stringify({
+      m: method, p: path, s: res.statusCode,
+      ip: event.requestContext?.http?.sourceIp,
+      ua: (event.headers?.["user-agent"] || "").slice(0, 80),
+    }));
+    return res;
   } catch (err) {
-    console.error("unhandled", err);
+    console.error("unhandled", method, path, err);
     return error(500, "internal", "Internal error");
   }
 }

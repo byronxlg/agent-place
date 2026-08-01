@@ -34,12 +34,18 @@ export function fakeDoc() {
       const item = items.get(key);
       const v = p.ExpressionAttributeValues || {};
       if (p.UpdateExpression.startsWith("SET last_placed_at")) {
-        const ok = item &&
-          (item.last_placed_at === undefined || item.last_placed_at <= v[":cutoff"]);
+        const upsert = p.ConditionExpression.includes("attribute_not_exists(pk)");
+        const ok = upsert
+          ? (!item || item.last_placed_at === undefined || item.last_placed_at <= v[":cutoff"])
+          : (item && (item.last_placed_at === undefined || item.last_placed_at <= v[":cutoff"]));
         if (!ok) throw condFail(item);
-        item.last_placed_at = v[":now"];
-        item.pixels_placed = (item.pixels_placed || 0) + v[":one"];
-        return { Attributes: { ...item } };
+        const cur = item || { ...p.Key };
+        cur.last_placed_at = v[":now"];
+        cur.pixels_placed = (cur.pixels_placed || 0) + v[":one"];
+        if (v[":name"] !== undefined) cur.name = v[":name"];
+        if (cur.created_at === undefined) cur.created_at = v[":now"];
+        items.set(key, cur);
+        return { Attributes: { ...cur } };
       }
       if (p.UpdateExpression === "SET px.#i = :c, #o.#i = :n") {
         if (!item || item.px === undefined || item.own === undefined) throw condFail(item);

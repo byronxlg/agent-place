@@ -87,6 +87,37 @@ export class Store {
     return res.Item;
   }
 
+  // Anonymous placement: same cooldown mechanics as claimPlacement but keyed
+  // on a hash of the caller's IP, with upsert semantics (no registration).
+  // The derived name (anon-xxxx) is stable per IP, so anons appear on the
+  // leaderboard and in attribution like everyone else.
+  async claimAnonPlacement(ip, now = Date.now()) {
+    const ipHash = createHash("sha256").update(`agent-place:${ip}`).digest("hex");
+    const name = `anon-${ipHash.slice(0, 4)}`;
+    const cutoff = now - COOLDOWN_SECONDS * 1000;
+    try {
+      const res = await this.doc.update({
+        TableName: TABLE,
+        Key: { pk: `K#anon#${ipHash}`, sk: "#" },
+        UpdateExpression:
+          "SET last_placed_at = :now, #n = :name, created_at = if_not_exists(created_at, :now) ADD pixels_placed :one",
+        ConditionExpression:
+          "attribute_not_exists(pk) OR attribute_not_exists(last_placed_at) OR last_placed_at <= :cutoff",
+        ExpressionAttributeNames: { "#n": "name" },
+        ExpressionAttributeValues: { ":now": now, ":one": 1, ":cutoff": cutoff, ":name": name },
+        ReturnValues: "ALL_NEW",
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+      });
+      return res.Attributes;
+    } catch (err) {
+      if (err.name !== "ConditionalCheckFailedException") throw err;
+      const last = Number(err.Item?.last_placed_at?.N ?? 0);
+      const nextAllowedAt = last + COOLDOWN_SECONDS * 1000;
+      const retryAfter = Math.max(1, Math.ceil((nextAllowedAt - now) / 1000));
+      throw new CooldownError(retryAfter, nextAllowedAt);
+    }
+  }
+
   // Atomically claims a placement slot: enforces cooldown and increments the
   // pixel counter. Returns the agent record. Throws UnauthorizedError or
   // CooldownError.
