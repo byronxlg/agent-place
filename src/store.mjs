@@ -115,17 +115,18 @@ export class Store {
     }
   }
 
-  // Writes one pixel. Self-heals the tile item's px map on first touch.
-  async writePixel(x, y, color) {
+  // Writes one pixel with attribution. Self-heals the tile item's maps on
+  // first touch.
+  async writePixel(x, y, color, name) {
     const { tile, index } = tileFor(x, y);
     const key = { pk: `T#${tile}`, sk: "#" };
     const setPixel = () => this.doc.update({
       TableName: TABLE,
       Key: key,
-      UpdateExpression: "SET px.#i = :c",
-      ConditionExpression: "attribute_exists(px)",
-      ExpressionAttributeNames: { "#i": String(index) },
-      ExpressionAttributeValues: { ":c": color },
+      UpdateExpression: "SET px.#i = :c, #o.#i = :n",
+      ConditionExpression: "attribute_exists(px) AND attribute_exists(#o)",
+      ExpressionAttributeNames: { "#i": String(index), "#o": "own" },
+      ExpressionAttributeValues: { ":c": color, ":n": name ?? "" },
     });
     try {
       await setPixel();
@@ -135,16 +136,31 @@ export class Store {
         await this.doc.update({
           TableName: TABLE,
           Key: key,
-          UpdateExpression: "SET px = :empty",
-          ConditionExpression: "attribute_not_exists(px)",
+          UpdateExpression: "SET px = if_not_exists(px, :empty), #o = if_not_exists(#o, :empty)",
+          ExpressionAttributeNames: { "#o": "own" },
           ExpressionAttributeValues: { ":empty": {} },
         });
       } catch (err2) {
-        // Lost the init race to another writer; the map now exists.
+        // Lost the init race to another writer; the maps now exist.
         if (err2.name !== "ConditionalCheckFailedException") throw err2;
       }
       await setPixel();
     }
+  }
+
+  // Color + owner of a single pixel.
+  async pixelInfo(x, y) {
+    const { tile, index } = tileFor(x, y);
+    const res = await this.doc.get({
+      TableName: TABLE,
+      Key: { pk: `T#${tile}`, sk: "#" },
+    });
+    const item = res.Item || {};
+    return {
+      x, y,
+      color: item.px?.[String(index)] ?? 0,
+      placed_by: item.own?.[String(index)] || null,
+    };
   }
 
   async recordRecent(x, y, color, name, now = Date.now()) {
@@ -190,6 +206,44 @@ export class Store {
       request = un && Object.keys(un).length ? un : null;
     }
     return this._setCache("canvas", assemble(tileMaps));
+  }
+
+  // Placement counts bucketed per 10 minutes over the last 6 hours, from the
+  // recent feed (24h TTL).
+  async activity(now = Date.now()) {
+    const cached = this._cached("activity", 30000);
+    if (cached) return cached;
+    const BUCKET_MS = 600_000;
+    const BUCKETS = 36;
+    const horizon = now - BUCKET_MS * BUCKETS;
+    const counts = new Array(BUCKETS).fill(0);
+    let items = 0;
+    let start;
+    let scanned = 0;
+    do {
+      const res = await this.doc.query({
+        TableName: TABLE,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": "R" },
+        ScanIndexForward: false,
+        Limit: 1000,
+        ExclusiveStartKey: start,
+      });
+      for (const it of res.Items || []) {
+        items++;
+        if (it.ts >= horizon) {
+          const b = Math.min(BUCKETS - 1, Math.floor((it.ts - horizon) / BUCKET_MS));
+          counts[b]++;
+        }
+      }
+      start = res.LastEvaluatedKey;
+      scanned++;
+    } while (start && scanned < 5);
+    return this._setCache("activity", {
+      bucket_seconds: BUCKET_MS / 1000,
+      buckets: counts,
+      total_24h: items,
+    });
   }
 
   // Top agents by pixels placed, plus totals. Scan is fine at this scale.

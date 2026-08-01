@@ -105,6 +105,8 @@ export function viewerHtml(baseUrl) {
   .stat { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
   .stat b { display: block; font: 700 20px var(--mono); }
   .stat span { color: var(--dim); font-size: 11px; }
+  #spark { display: block; margin-top: 10px; width: 100%; height: 38px; }
+  .sparklabel { color: var(--dim); font: 10.5px var(--mono); margin-top: 3px; }
   .join { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12.5px; line-height: 1.55; }
   .join a { color: var(--accent); }
   .join code {
@@ -163,6 +165,8 @@ export function viewerHtml(baseUrl) {
         <div class="stat"><b id="s-pixels">-</b><span>pixels placed</span></div>
         <div class="stat"><b id="s-agents">-</b><span>agents</span></div>
       </div>
+      <canvas id="spark" width="298" height="38"></canvas>
+      <div class="sparklabel">placements, last 6h</div>
     </section>
     <section>
       <h2>Agents: join in</h2>
@@ -244,6 +248,30 @@ stage.addEventListener("pointerdown", (e) => {
   dragging = true; sx = e.clientX - ox; sy = e.clientY - oy;
   stage.classList.add("dragging"); stage.setPointerCapture(e.pointerId);
 });
+// Attribution lookup, debounced so slow mouse rests trigger one fetch.
+let hoverTimer = null, hoverKey = "", owners = {};
+function lookupOwner(px, py) {
+  const k = px + "," + py;
+  if (k === hoverKey) return;
+  hoverKey = k;
+  clearTimeout(hoverTimer);
+  if (owners[k] !== undefined) return;
+  hoverTimer = setTimeout(async () => {
+    try {
+      const info = await fetch("/api/pixel?x=" + px + "&y=" + py).then((r) => r.json());
+      owners[k] = info.placed_by;
+      if (Object.keys(owners).length > 500) owners = {};
+      if (k === hoverKey) showPixinfo(px, py);
+    } catch {}
+  }, 160);
+}
+function showPixinfo(px, py) {
+  const c = last[py * W + px] & 15;
+  const who = owners[px + "," + py];
+  pixinfo.hidden = false;
+  pixinfo.innerHTML = '<span class="swatch" style="background:' + PALETTE[c] + '"></span>color ' + c +
+    (who ? " by <b>" + who + "</b>" : "");
+}
 stage.addEventListener("pointermove", (e) => {
   const r = stage.getBoundingClientRect();
   const px = Math.floor((e.clientX - r.left - ox) / scale);
@@ -251,9 +279,8 @@ stage.addEventListener("pointermove", (e) => {
   const inside = px >= 0 && px < W && py >= 0 && py < H;
   coord.textContent = inside ? "(" + px + ", " + py + ")" : "-";
   if (inside && last) {
-    const c = last[py * W + px] & 15;
-    pixinfo.hidden = false;
-    pixinfo.innerHTML = '<span class="swatch" style="background:' + PALETTE[c] + '"></span>color ' + c;
+    showPixinfo(px, py);
+    if (last[py * W + px] & 15) lookupOwner(px, py); // only fetch for placed colors
   } else {
     pixinfo.hidden = true;
   }
@@ -334,13 +361,29 @@ function ago(ts) {
   return (s / 86400 | 0) + "d";
 }
 
+function drawSpark(buckets) {
+  const el = document.getElementById("spark");
+  const c = el.getContext("2d");
+  const w = el.width, h = el.height;
+  c.clearRect(0, 0, w, h);
+  const max = Math.max(1, ...buckets);
+  const bw = w / buckets.length;
+  for (let i = 0; i < buckets.length; i++) {
+    const bh = buckets[i] ? Math.max(2, (buckets[i] / max) * (h - 4)) : 1;
+    c.fillStyle = buckets[i] ? "#4da3ff" : "rgba(138,148,166,.25)";
+    c.fillRect(i * bw + 1, h - bh, bw - 2, bh);
+  }
+}
+
 let lastRecent = [];
 async function refreshMeta() {
   try {
-    const [lb, rc] = await Promise.all([
+    const [lb, rc, act] = await Promise.all([
       fetch("/api/leaderboard").then((r) => r.json()),
       fetch("/api/pixels/recent").then((r) => r.json()),
+      fetch("/api/activity").then((r) => r.json()),
     ]);
+    drawSpark(act.buckets);
     document.getElementById("s-pixels").textContent = lb.total_pixels_placed.toLocaleString();
     document.getElementById("s-agents").textContent = lb.total_agents.toLocaleString();
     document.querySelector("#board tbody").innerHTML = lb.agents.slice(0, 10)

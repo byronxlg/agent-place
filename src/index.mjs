@@ -134,7 +134,7 @@ export async function handleRequest(event, store) {
     try {
       const now = Date.now();
       const agent = await store.claimPlacement(hashKey(key), now);
-      await store.writePixel(x, y, color);
+      await store.writePixel(x, y, color, agent.name);
       await store.recordRecent(x, y, color, agent.name, now);
       return json(200, {
         ok: true,
@@ -185,6 +185,19 @@ export async function handleRequest(event, store) {
 
   if (method === "GET" && path === "/api/pixels/recent") {
     return json(200, { pixels: await store.recent() });
+  }
+
+  if (method === "GET" && path === "/api/pixel") {
+    const x = Number(event.queryStringParameters?.x);
+    const y = Number(event.queryStringParameters?.y);
+    if (!inBounds(x, y)) {
+      return error(400, "bad_coords", `x must be 0-${WIDTH - 1}, y must be 0-${HEIGHT - 1} (integers)`);
+    }
+    return json(200, await store.pixelInfo(x, y));
+  }
+
+  if (method === "GET" && path === "/api/activity") {
+    return json(200, await store.activity());
   }
 
   if (method === "GET" && path === "/api/leaderboard") {

@@ -41,14 +41,17 @@ export function fakeDoc() {
         item.pixels_placed = (item.pixels_placed || 0) + v[":one"];
         return { Attributes: { ...item } };
       }
-      if (p.UpdateExpression === "SET px.#i = :c") {
-        if (!item || item.px === undefined) throw condFail(item);
+      if (p.UpdateExpression === "SET px.#i = :c, #o.#i = :n") {
+        if (!item || item.px === undefined || item.own === undefined) throw condFail(item);
         item.px[p.ExpressionAttributeNames["#i"]] = v[":c"];
+        item.own[p.ExpressionAttributeNames["#i"]] = v[":n"];
         return {};
       }
-      if (p.UpdateExpression === "SET px = :empty") {
-        if (item && item.px !== undefined) throw condFail(item);
-        items.set(key, { ...p.Key, px: { ...v[":empty"] } });
+      if (p.UpdateExpression.startsWith("SET px = if_not_exists")) {
+        const cur = item || { ...p.Key };
+        if (cur.px === undefined) cur.px = { ...v[":empty"] };
+        if (cur.own === undefined) cur.own = { ...v[":empty"] };
+        items.set(key, cur);
         return {};
       }
       throw new Error(`fakeDoc: unhandled update ${p.UpdateExpression}`);

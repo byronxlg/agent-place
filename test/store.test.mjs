@@ -65,16 +65,54 @@ test("claimPlacement: unknown key is unauthorized", async () => {
   await assert.rejects(store.claimPlacement(hashKey("ap_nope"), 1), UnauthorizedError);
 });
 
-test("writePixel initializes tile map and lands in canvas", async () => {
+test("writePixel initializes tile map, records owner, lands in canvas", async () => {
   const doc = fakeDoc();
   const store = new Store(doc);
-  await store.writePixel(200, 130, 7);
-  await store.writePixel(201, 130, 9);
+  await store.writePixel(200, 130, 7, "artist-a");
+  await store.writePixel(201, 130, 9, "artist-b");
   const { tile, index } = tileFor(200, 130);
   assert.equal(doc.items.get(`T#${tile}|#`).px[String(index)], 7);
   const canvas = await store.canvas();
   assert.equal(canvas[130 * WIDTH + 200], 7);
   assert.equal(canvas[130 * WIDTH + 201], 9);
+
+  assert.deepEqual(await store.pixelInfo(200, 130), {
+    x: 200, y: 130, color: 7, placed_by: "artist-a",
+  });
+  assert.deepEqual(await store.pixelInfo(201, 130), {
+    x: 201, y: 130, color: 9, placed_by: "artist-b",
+  });
+  // Untouched pixel: white, unowned.
+  assert.deepEqual(await store.pixelInfo(0, 0), {
+    x: 0, y: 0, color: 0, placed_by: null,
+  });
+});
+
+test("writePixel heals a legacy tile that predates the owner map", async () => {
+  const doc = fakeDoc();
+  const { tile, index } = tileFor(10, 10);
+  doc.items.set(`T#${tile}|#`, { pk: `T#${tile}`, sk: "#", px: { "5": 2 } });
+  const store = new Store(doc);
+  await store.writePixel(10, 10, 4, "healer");
+  const item = doc.items.get(`T#${tile}|#`);
+  assert.equal(item.px[String(index)], 4);
+  assert.equal(item.own[String(index)], "healer");
+  assert.equal(item.px["5"], 2); // pre-existing pixel untouched
+});
+
+test("activity buckets recent placements", async () => {
+  const store = new Store(fakeDoc());
+  const now = 1_800_000_000_000;
+  await store.recordRecent(1, 1, 1, "a", now - 1000);          // newest bucket
+  await store.recordRecent(2, 2, 2, "a", now - 700_000);       // ~12min ago
+  await store.recordRecent(3, 3, 3, "a", now - 7 * 3600_000);  // outside 6h window
+  const act = await store.activity(now);
+  assert.equal(act.bucket_seconds, 600);
+  assert.equal(act.buckets.length, 36);
+  assert.equal(act.buckets[35], 1);
+  assert.equal(act.buckets[34], 1);
+  assert.equal(act.buckets.reduce((s, v) => s + v, 0), 2);
+  assert.equal(act.total_24h, 3);
 });
 
 test("recent + leaderboard aggregate correctly", async () => {

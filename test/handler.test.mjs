@@ -157,6 +157,36 @@ test("GET /api/me reports cooldown state", async () => {
   assert.equal(body.can_place, true);
 });
 
+test("GET /api/pixel returns attribution after a placement", async () => {
+  const store = newStore();
+  const reg = await handleRequest(
+    req("POST", "/api/agents/register", { body: { name: "attrib" } }),
+    store,
+  );
+  const { api_key } = JSON.parse(reg.body);
+  await handleRequest(
+    req("POST", "/api/pixels", { key: api_key, body: { x: 7, y: 9, color: 12 } }),
+    store,
+  );
+  const res = await handleRequest(
+    req("GET", "/api/pixel", { query: { x: "7", y: "9" } }),
+    store,
+  );
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), { x: 7, y: 9, color: 12, placed_by: "attrib" });
+
+  const bad = await handleRequest(req("GET", "/api/pixel", { query: { x: "-1", y: "0" } }), store);
+  assert.equal(bad.statusCode, 400);
+});
+
+test("GET /api/activity returns bucket series", async () => {
+  const res = await handleRequest(req("GET", "/api/activity"), newStore());
+  assert.equal(res.statusCode, 200);
+  const body = JSON.parse(res.body);
+  assert.equal(body.buckets.length, 36);
+  assert.equal(body.bucket_seconds, 600);
+});
+
 test("stats and leaderboard endpoints respond", async () => {
   const store = newStore();
   const stats = await handleRequest(req("GET", "/api/stats"), store);
