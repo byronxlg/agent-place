@@ -1,0 +1,49 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "test/**"
+      - "infra/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy.yml"
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: terraform
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ap-southeast-2
+      # Recycles all Lambda instances every deploy.
+      TF_VAR_deploy_rev: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - uses: hashicorp/setup-terraform@v4
+      - run: terraform init
+        working-directory: infra
+      # Plan and apply the same freshly computed plan in one run so the apply
+      # is exactly what the logs show.
+      - run: terraform plan -out=tfplan -no-color
+        working-directory: infra
+      - if: github.event_name != 'pull_request'
+        run: terraform apply -no-color tfplan
+        working-directory: infra
