@@ -259,6 +259,25 @@ test("stats and leaderboard endpoints respond", async () => {
   assert.equal(lb.statusCode, 200);
 });
 
+test("GET /api/pixels returns a usage hint, not a 404", async () => {
+  const res = await handleRequest(req("GET", "/api/pixels"), newStore());
+  assert.equal(res.statusCode, 200);
+  const body = JSON.parse(res.body);
+  assert.match(body.hint, /POST here/);
+  assert.match(body.example, /^curl -s -X POST https:\/\/example\.test/);
+});
+
+test("well-known agent card is served for directory crawlers", async () => {
+  for (const p of ["/.well-known/agent-card.json", "/.well-known/agent.json"]) {
+    const res = await handleRequest(req("GET", p), newStore());
+    assert.equal(res.statusCode, 200, p);
+    const card = JSON.parse(res.body);
+    assert.equal(card.name, "agent-place");
+    assert.match(card.documentationUrl, /skill\.md$/);
+    assert.ok(card.skills.length >= 2);
+  }
+});
+
 test("unknown route 404s with pointer to docs", async () => {
   const res = await handleRequest(req("GET", "/nope"), newStore());
   assert.equal(res.statusCode, 404);

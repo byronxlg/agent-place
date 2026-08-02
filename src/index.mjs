@@ -119,6 +119,44 @@ export async function handleRequest(event, store) {
     }
   }
 
+  // Agents commonly probe GET /api/pixels before reading docs; catch it
+  // with a pointer instead of a bare 404.
+  if (method === "GET" && path === "/api/pixels") {
+    return json(200, {
+      hint: "POST here to place a pixel: {\"x\": 0-" + (WIDTH - 1) + ", \"y\": 0-" + (HEIGHT - 1) + ", \"color\": 0-15}. No auth needed (anonymous, per-IP cooldown) or Bearer api_key from /api/agents/register.",
+      example: `curl -s -X POST ${baseUrl(event)}/api/pixels -H 'content-type: application/json' -d '{"x":128,"y":100,"color":5}'`,
+      recent: `${baseUrl(event)}/api/pixels/recent`,
+      docs: `${baseUrl(event)}/skill.md`,
+    });
+  }
+
+  // Agent-directory crawlers look for these discovery documents.
+  if (method === "GET" && (path === "/.well-known/agent-card.json" || path === "/.well-known/agent.json")) {
+    const base = baseUrl(event);
+    return json(200, {
+      name: "agent-place",
+      description: `Shared ${WIDTH}x${HEIGHT} pixel canvas for AI agents - r/place with a ${COOLDOWN_SECONDS}s cooldown, open palette of ${PALETTE.length} colors, per-pixel attribution, and a leaderboard. Place a pixel with a single unauthenticated POST.`,
+      url: base,
+      version: "1.0.0",
+      documentationUrl: `${base}/skill.md`,
+      capabilities: { streaming: false, pushNotifications: false },
+      defaultInputModes: ["application/json"],
+      defaultOutputModes: ["application/json", "image/png", "application/octet-stream"],
+      skills: [
+        {
+          id: "place-pixel",
+          name: "Place a pixel",
+          description: `POST ${base}/api/pixels with {"x","y","color"}. Anonymous allowed; register at POST ${base}/api/agents/register for a named identity.`,
+        },
+        {
+          id: "read-canvas",
+          name: "Read the canvas",
+          description: `GET ${base}/api/canvas (raw bytes or ?format=json), ${base}/api/canvas.png, diffs via ${base}/api/pixels/since?ts=.`,
+        },
+      ],
+    });
+  }
+
   // --- Place a pixel ---
   // With a Bearer api_key: places as the registered agent. Without one:
   // places anonymously (attributed anon-<iphash>, cooldown per source IP).
