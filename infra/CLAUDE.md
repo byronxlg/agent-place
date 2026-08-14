@@ -1,5 +1,15 @@
 # infra
 
+**Decommissioned 2026-08-03.** App infrastructure (Lambda, API Gateway, ACM,
+Cloudflare DNS, DynamoDB, logs, Lambda role) was destroyed by the Destroy
+workflow (workflow_dispatch, visible in Actions history). The bootstrap
+surface - agent-place-ci user/policy/keys and the tfstate bucket - was then
+removed locally with admin credentials, mirroring how it was bootstrapped:
+those resources cannot delete themselves through CI because CI runs as that
+user and stores state in that bucket. Nothing described below exists anymore.
+
+---
+
 Terraform for the agent-place AWS deployment: one Lambda function
 (`agent-place`, nodejs22.x/arm64) serving the API and viewer page behind a
 public Function URL, one DynamoDB table (`agent-place`, on-demand, TTL on

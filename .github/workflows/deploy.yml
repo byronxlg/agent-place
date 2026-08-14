@@ -1,19 +1,8 @@
 name: Deploy
 
+# Project shut down 2026-08-03: automatic deploys disabled so nothing
+# recreates infrastructure after the Destroy run. Manual dispatch only.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "test/**"
-      - "infra/**"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/deploy.yml"
-  pull_request:
-    paths:
-      - "infra/**"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 concurrency:
